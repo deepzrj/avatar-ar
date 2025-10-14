@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>My Splat – AR</title>
+  <style>html,body{margin:0;height:100%;overflow:hidden}</style>
+</head>
+<body>
+<script type="module">
+  import * as GaussianSplats3D from "./lib/gaussian-splats-3d.module.js";
+
+  const viewer = new GaussianSplats3D.Viewer({
+    webXRMode: GaussianSplats3D.WebXRMode.AR,
+    sharedMemoryForWorkers: false,
+    gpuAcceleratedSort: true,
+    enableSIMDInSort: true,
+    cameraUp: [0, 1, 0],
+    initialCameraPosition: [0, 1.6, 2],
+    initialCameraLookAt: [0, 1.2, 0]
+  });
+
+  await viewer.addSplatScene("./assets/data/Shakti-edit.ply", {
+    showLoadingUI: true,
+    position: [0, 0, -1.2],
+    scale: [5, 5, 5],   // good starting scale for Scaniverse PLY
+    splatAlphaRemovalThreshold: 5
+  });
+
+  viewer.start();
+</script>
+</body>
+</html>

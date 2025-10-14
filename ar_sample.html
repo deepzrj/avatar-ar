@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Splat Sample (desktop)</title>
+  <style>html,body{margin:0;height:100%;overflow:hidden}</style>
+</head>
+<body>
+<script type="module">
+  import * as GaussianSplats3D from "./lib/gaussian-splats-3d.module.js";
+
+  const viewer = new GaussianSplats3D.Viewer({
+    webXRMode: GaussianSplats3D.WebXRMode.NONE,   // desktop sanity check
+    sharedMemoryForWorkers: false,
+    gpuAcceleratedSort: true,
+    enableSIMDInSort: true,
+    cameraUp: [0, 1, 0],
+    initialCameraPosition: [0, 0, 3],
+    initialCameraLookAt: [0, 0, 0],
+  });
+
+  const MODEL_URL = "./assets/data/Shakti-edit.ksplat"; // ← local ksplat
+  await viewer.addSplatScene(MODEL_URL, {
+    showLoadingUI: true,
+    position: [0, 0, 0],
+    scale: [1, 1, 1],
+    splatAlphaRemovalThreshold: 5
+  });
+
+  viewer.start();
+</script>
+</body>
+</html>
