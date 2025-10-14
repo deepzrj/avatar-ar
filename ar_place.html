@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Avatar Splat – AR (plane detect + one-tap place)</title>
 
-  <!-- Import map for GitHub Pages -->
   <script type="importmap">{
     "imports":{
       "three":"./lib/three.module.js",
@@ -31,16 +30,10 @@ import * as G from "@mkkellogg/gaussian-splats-3d";
 const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
 
 // ========= Config =========
-const MODEL = "./assets/data/Shakti-edit.ksplat";      // your ksplat
-
-// Euler->Quaternion helper so you can tweak easily
+const MODEL = "./assets/data/Shakti-edit.ksplat";    // your ksplat
+const PLACE_OFFSET = 0.8;                            // meters away from reticle/camera
 const qFromEuler = (x=0,y=0,z=0)=> new THREE.Quaternion().setFromEuler(new THREE.Euler(x,y,z)).toArray();
-
-// Orientation presets
-const ROT_180_X = qFromEuler(Math.PI, 0, 0);          // flip over (your case)
-const ROT_90_X  = qFromEuler(Math.PI/2, 0, 0);
-const ROT_90_Y  = qFromEuler(0, Math.PI/2, 0);
-const ROT_90_Z  = qFromEuler(0, 0, Math.PI/2);
+const ROT_180_X = qFromEuler(Math.PI, 0, 0);        // flip over (legs up → down)
 
 // ========= Three.js scene =========
 const scene = new THREE.Scene();
@@ -51,13 +44,13 @@ renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// World-locked root (we move this with hit-test)
+// World-locked root (we move this with hit-test pose)
 const root = new THREE.Group();
 scene.add(root);
 
-// Reticle so you know where you'll place it
+// Reticle (placement hint)
 const reticle = new THREE.Mesh(
-  new THREE.RingGeometry(0.08, 0.1, 32).rotateX(-Math.PI/2),
+  new THREE.RingGeometry(0.06, 0.085, 32).rotateX(-Math.PI/2),
   new THREE.MeshBasicMaterial({color:0xffffff})
 );
 reticle.matrixAutoUpdate = false;
@@ -68,7 +61,6 @@ scene.add(reticle);
 let splat=null, session, refSpace, viewerSpace, hitSource;
 let placed=false;
 
-// Preload the model (no spinner UI so taps aren't blocked)
 (async()=>{
   try{
     log("preloading model…");
@@ -81,12 +73,12 @@ let placed=false;
     await splat.addSplatScenes([{
       path: MODEL,
       splatAlphaRemovalThreshold: 5,
-      rotation: ROT_180_X      // ← flip 180° around X (legs were up)
-      // if orientation still looks wrong, try ROT_90_X / ROT_90_Y / ROT_90_Z
+      rotation: ROT_180_X
     }]);
 
-    splat.scale.set(0.25, 0.25, 0.25); // smaller start scale
-    splat.visible = false;             // show after placement
+    // smaller, as requested
+    splat.scale.set(0.10, 0.10, 0.10);
+    splat.visible = false;
     root.add(splat);
     log("model preloaded ✔  tap Enter AR");
   }catch(e){ log("load ERROR:", e?.message||e); console.error(e); }
@@ -110,7 +102,6 @@ async function startAR(){
     viewerSpace = await session.requestReferenceSpace('viewer');
     hitSource   = await session.requestHitTestSource({space:viewerSpace});
 
-    // use controller "select" (most reliable) or screen taps
     session.addEventListener('select', placeOnce);
     addEventListener('pointerup', placeOnce, {passive:true});
     addEventListener('touchend', placeOnce, {passive:true});
@@ -120,17 +111,22 @@ async function startAR(){
   }catch(e){ log("AR start ERROR:", e?.message||e); console.error(e); }
 }
 
-// ========= Place exactly once (then stay world-locked) =========
+// ========= Place exactly once (and push it a bit farther) =========
 function placeOnce(){
-  if(!session || !splat) return;
-  if(reticle.visible && !placed){
+  if(!session || !splat || placed) return;
+  if(reticle.visible){
+    // copy reticle pose
     reticle.matrix.decompose(root.position, root.quaternion, root.scale);
+    // move forward from reticle by PLACE_OFFSET meters
+    const forward = new THREE.Vector3(0,0,-1).applyQuaternion(root.quaternion);
+    root.position.addScaledVector(forward, PLACE_OFFSET);
+
     splat.visible = true;
     placed = true;
     reticle.visible = false;
     log("placed ✔");
 
-    // Stop listening so a second tap can't unlock/move it
+    // stop listening so a second tap can’t move it
     session.removeEventListener('select', placeOnce);
     removeEventListener('pointerup', placeOnce);
     removeEventListener('touchend', placeOnce);
