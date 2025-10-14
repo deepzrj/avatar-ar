@@ -11,7 +11,7 @@
   import * as GaussianSplats3D from "./lib/gaussian-splats-3d.module.js";
 
   const viewer = new GaussianSplats3D.Viewer({
-    webXRMode: GaussianSplats3D.WebXRMode.NONE,   // desktop sanity check
+    webXRMode: GaussianSplats3D.WebXRMode.AR,   // desktop sanity check
     sharedMemoryForWorkers: false,
     gpuAcceleratedSort: true,
     enableSIMDInSort: true,
@@ -23,8 +23,8 @@
   const MODEL_URL = "./assets/data/Shakti-edit.ksplat"; // ← local ksplat
   await viewer.addSplatScene(MODEL_URL, {
     showLoadingUI: true,
-    position: [0, 0, 0],
-    scale: [1, 1, 1],
+    position: [0, -0.4, -1.2],  // ~40 cm down; ~1.2 m in front
+    scale: [0.6, 0.6, 0.6],
     splatAlphaRemovalThreshold: 5
   });
 
