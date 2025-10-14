@@ -29,13 +29,21 @@ import * as G from "@mkkellogg/gaussian-splats-3d";
 
 const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
 
-// ========= Config =========
-const MODEL = "./assets/data/Shakti-edit.ksplat";    // your ksplat
-const PLACE_OFFSET = 0.8;                            // meters away from reticle/camera
-const qFromEuler = (x=0,y=0,z=0)=> new THREE.Quaternion().setFromEuler(new THREE.Euler(x,y,z)).toArray();
-const ROT_180_X = qFromEuler(Math.PI, 0, 0);        // flip over (legs up → down)
+// --------- Config ---------
+const MODEL = "./assets/data/Shakti-edit.ksplat";
+const PLACE_OFFSET = 0.8; // meters in front of reticle/camera
 
-// ========= Three.js scene =========
+// Helper: Euler (radians) -> quaternion array
+const qFromEuler = (x=0,y=0,z=0)=>
+  new THREE.Quaternion().setFromEuler(new THREE.Euler(x,y,z)).toArray();
+
+// ORIENTATION: stand upright (was lying on the floor before)
+// -90° around X stands the model up.
+// If it faces the wrong way, try ROT_STAND_YAW = qFromEuler(-Math.PI/2, Math.PI, 0)
+const ROT_STAND = qFromEuler(-Math.PI/2, 0, 0);
+// const ROT_STAND_YAW = qFromEuler(-Math.PI/2, Math.PI, 0); // optional 180° turn
+
+// --------- Three.js scene ---------
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
 const renderer = new THREE.WebGLRenderer({alpha:true, antialias:true});
@@ -44,11 +52,11 @@ renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// World-locked root (we move this with hit-test pose)
+// World-locked root we move with hit-test pose
 const root = new THREE.Group();
 scene.add(root);
 
-// Reticle (placement hint)
+// Reticle
 const reticle = new THREE.Mesh(
   new THREE.RingGeometry(0.06, 0.085, 32).rotateX(-Math.PI/2),
   new THREE.MeshBasicMaterial({color:0xffffff})
@@ -57,7 +65,7 @@ reticle.matrixAutoUpdate = false;
 reticle.visible = false;
 scene.add(reticle);
 
-// ========= Splat (DropInViewer) =========
+// --------- Splat viewer (DropInViewer) ---------
 let splat=null, session, refSpace, viewerSpace, hitSource;
 let placed=false;
 
@@ -73,18 +81,18 @@ let placed=false;
     await splat.addSplatScenes([{
       path: MODEL,
       splatAlphaRemovalThreshold: 5,
-      rotation: ROT_180_X
+      rotation: ROT_STAND      // << upright
+      // rotation: ROT_STAND_YAW // use this line instead if it faces backward
     }]);
 
-    // smaller, as requested
-    splat.scale.set(0.10, 0.10, 0.10);
+    splat.scale.set(0.10, 0.10, 0.10); // smaller
     splat.visible = false;
     root.add(splat);
     log("model preloaded ✔  tap Enter AR");
   }catch(e){ log("load ERROR:", e?.message||e); console.error(e); }
 })();
 
-// ========= Start AR =========
+// --------- Start AR ---------
 document.getElementById('enter').addEventListener('click', startAR, {passive:true});
 
 async function startAR(){
@@ -111,13 +119,13 @@ async function startAR(){
   }catch(e){ log("AR start ERROR:", e?.message||e); console.error(e); }
 }
 
-// ========= Place exactly once (and push it a bit farther) =========
+// --------- Place exactly once & push a bit farther ---------
 function placeOnce(){
   if(!session || !splat || placed) return;
   if(reticle.visible){
-    // copy reticle pose
     reticle.matrix.decompose(root.position, root.quaternion, root.scale);
-    // move forward from reticle by PLACE_OFFSET meters
+
+    // push forward so you can walk around it immediately
     const forward = new THREE.Vector3(0,0,-1).applyQuaternion(root.quaternion);
     root.position.addScaledVector(forward, PLACE_OFFSET);
 
@@ -126,14 +134,13 @@ function placeOnce(){
     reticle.visible = false;
     log("placed ✔");
 
-    // stop listening so a second tap can’t move it
     session.removeEventListener('select', placeOnce);
     removeEventListener('pointerup', placeOnce);
     removeEventListener('touchend', placeOnce);
   }
 }
 
-// ========= Frame loop with hit-test =========
+// --------- Frame loop + hit-test ---------
 renderer.setAnimationLoop((t, frame)=>{
   if(frame && hitSource && !placed){
     const hits = frame.getHitTestResults(hitSource);
@@ -149,14 +156,14 @@ renderer.setAnimationLoop((t, frame)=>{
   renderer.render(scene, camera);
 });
 
-// ========= Resize =========
+// --------- Resize ---------
 addEventListener('resize', ()=>{
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// quick HEAD check
+// quick HEAD check (helps debug 404s)
 try{
   const r = await fetch(MODEL,{method:'HEAD'});
   log("model HEAD:", r.status);
