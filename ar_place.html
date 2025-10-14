@@ -1,16 +1,49 @@
-﻿<script type="module">
+﻿<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Avatar Splat – AR (plane detect + one-tap place)</title>
+
+  <script type="importmap">{
+    "imports":{
+      "three":"./lib/three.module.js",
+      "@mkkellogg/gaussian-splats-3d":"./lib/gaussian-splats-3d.module.js"
+    }
+  }</script>
+
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#111;touch-action:none}
+    #enter{position:fixed;left:12px;bottom:12px;padding:10px 14px;border:0;border-radius:10px;background:#0a84ff;color:#fff;font:600 14px system-ui}
+    #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui;white-space:pre-wrap}
+    canvas{display:block}
+  </style>
+</head>
+<body>
+<button id="enter">Enter AR</button>
+<div id="log">loading…</div>
+
+<script type="module">
 import * as THREE from "three";
 import * as G from "@mkkellogg/gaussian-splats-3d";
 
 const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
 
-// ------- model & orientation -------
+// --------- Config ---------
 const MODEL = "./assets/data/Shakti-edit.ksplat";
+const PLACE_OFFSET = 0.8; // meters in front of reticle/camera
+
+// Helper: Euler (radians) -> quaternion array
 const qFromEuler = (x=0,y=0,z=0)=>
   new THREE.Quaternion().setFromEuler(new THREE.Euler(x,y,z)).toArray();
-const ROT_STAND_FACE = qFromEuler(Math.PI/2, Math.PI, 0); // upright + face viewer
 
-// ------- three.js -------
+// ORIENTATION: stand upright (was lying on the floor before)
+// -90° around X stands the model up.
+// If it faces the wrong way, try ROT_STAND_YAW = qFromEuler(-Math.PI/2, Math.PI, 0)
+const ROT_STAND = qFromEuler(Math.PI/2, 0, 0);
+// const ROT_STAND_YAW = qFromEuler(-Math.PI/2, Math.PI, 0); // optional 180° turn
+
+// --------- Three.js scene ---------
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
 const renderer = new THREE.WebGLRenderer({alpha:true, antialias:true});
@@ -19,9 +52,11 @@ renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
+// World-locked root we move with hit-test pose
 const root = new THREE.Group();
 scene.add(root);
 
+// Reticle
 const reticle = new THREE.Mesh(
   new THREE.RingGeometry(0.06, 0.085, 32).rotateX(-Math.PI/2),
   new THREE.MeshBasicMaterial({color:0xffffff})
@@ -30,10 +65,10 @@ reticle.matrixAutoUpdate = false;
 reticle.visible = false;
 scene.add(reticle);
 
+// --------- Splat viewer (DropInViewer) ---------
 let splat=null, session, refSpace, viewerSpace, hitSource;
-let placed=false, anchorSpace=null;
+let placed=false;
 
-// ---------- preload the model ----------
 (async()=>{
   try{
     log("preloading model…");
@@ -42,135 +77,97 @@ let placed=false, anchorSpace=null;
       gpuAcceleratedSort:false,
       enableSIMDInSort:false
     });
+
     await splat.addSplatScenes([{
       path: MODEL,
       splatAlphaRemovalThreshold: 5,
-      rotation: ROT_STAND_FACE
+      rotation: ROT_STAND      // << upright
+      // rotation: ROT_STAND_YAW // use this line instead if it faces backward
     }]);
-    splat.scale.set(0.08, 0.08, 0.08);
+
+    splat.scale.set(0.10, 0.10, 0.10); // smaller
     splat.visible = false;
-    splat.position.set(0,0,0);
-    splat.quaternion.identity();
     root.add(splat);
-
-    // quick HEAD to confirm file path works
-    try{ const r=await fetch(MODEL,{method:'HEAD'}); log("model HEAD:", r.status); }catch(e){ log("HEAD error:", e?.message||e); }
-
     log("model preloaded ✔  tap Enter AR");
   }catch(e){ log("load ERROR:", e?.message||e); console.error(e); }
 })();
 
-// ---------- support probe & button ----------
-const btn = document.getElementById('enter');
-btn.addEventListener('click', startAR, {passive:true});
+// --------- Start AR ---------
+document.getElementById('enter').addEventListener('click', startAR, {passive:true});
 
-(async ()=>{
-  if(!('xr' in navigator)){ log("WebXR not present in navigator — AR not available"); return; }
-  try{
-    const supported = await navigator.xr.isSessionSupported('immersive-ar');
-    log("isSessionSupported(immersive-ar):", supported ? "yes" : "no");
-    if(!supported) log("Tip: update Chrome & ARCore, allow Camera permission.");
-  }catch(e){ log("support probe error:", e?.message||e); }
-})();
-
-// ---------- start AR ----------
 async function startAR(){
+  if(!navigator.xr){ alert("WebXR not available"); return; }
   try{
-    if(!navigator.xr){ log("No navigator.xr — cannot start AR"); return; }
-
     session = await navigator.xr.requestSession('immersive-ar',{
       requiredFeatures:['hit-test','local-floor'],
-      optionalFeatures:['anchors','dom-overlay'],
-      domOverlay:{root:document.body}
+      optionalFeatures:['dom-overlay'], domOverlay:{root:document.body}
     });
-    log("AR session requested ✔");
 
     renderer.xr.setReferenceSpaceType('local-floor');
     await renderer.xr.setSession(session);
+
     refSpace    = await session.requestReferenceSpace('local-floor');
     viewerSpace = await session.requestReferenceSpace('viewer');
     hitSource   = await session.requestHitTestSource({space:viewerSpace});
-    log("AR session started ✔  move to find a surface, then tap to place");
 
     session.addEventListener('select', placeOnce);
     addEventListener('pointerup', placeOnce, {passive:true});
     addEventListener('touchend', placeOnce, {passive:true});
 
-    btn.remove();
-  }catch(e){
-    log("AR start ERROR:", e?.message||e);
-    console.error(e);
-    // common: "The device does not support session type 'immersive-ar'"
-    log("If denied earlier: Site settings → Camera = Allow, and ensure ARCore is installed.");
-  }
+    document.getElementById('enter').remove();
+    log("AR session started ✔  move phone to find a surface, then tap to place");
+  }catch(e){ log("AR start ERROR:", e?.message||e); console.error(e); }
 }
 
-// ---------- place once (anchors if available) ----------
-async function placeOnce(){
+// --------- Place exactly once & push a bit farther ---------
+function placeOnce(){
   if(!session || !splat || placed) return;
-  const frame = renderer.xr.getFrame();
-  if(!frame || !hitSource) return;
+  if(reticle.visible){
+    reticle.matrix.decompose(root.position, root.quaternion, root.scale);
 
-  const hits = frame.getHitTestResults(hitSource);
-  if(!hits.length){ log("no hit yet — keep moving phone"); return; }
+    // push forward so you can walk around it immediately
+    const forward = new THREE.Vector3(0,0,-1).applyQuaternion(root.quaternion);
+    root.position.addScaledVector(forward, PLACE_OFFSET);
 
-  const hit = hits[0];
-  const pose = hit.getPose(refSpace);
-  if(!pose) return;
+    splat.visible = true;
+    placed = true;
+    reticle.visible = false;
+    log("placed ✔");
 
-  if(hit.createAnchor){
-    try{
-      const anchor = await hit.createAnchor(pose);
-      anchorSpace = anchor.anchorSpace;
-      placed = true; splat.visible = true; reticle.visible = false;
-      log("placed ✔ (anchored)");
-      session.removeEventListener('select', placeOnce);
-      removeEventListener('pointerup', placeOnce);
-      removeEventListener('touchend', placeOnce);
-      return;
-    }catch(e){ log("anchor failed, using static pose"); console.warn(e); }
+    session.removeEventListener('select', placeOnce);
+    removeEventListener('pointerup', placeOnce);
+    removeEventListener('touchend', placeOnce);
   }
-
-  // fallback: static pose (less stable than anchors)
-  root.matrix.fromArray(pose.transform.matrix);
-  root.matrix.decompose(root.position, root.quaternion, root.scale);
-  placed = true; splat.visible = true; reticle.visible = false;
-  log("placed ✔");
-  session.removeEventListener('select', placeOnce);
-  removeEventListener('pointerup', placeOnce);
-  removeEventListener('touchend', placeOnce);
 }
 
-// ---------- frame loop ----------
+// --------- Frame loop + hit-test ---------
 renderer.setAnimationLoop((t, frame)=>{
   if(frame && hitSource && !placed){
     const hits = frame.getHitTestResults(hitSource);
     if(hits.length){
       const pose = hits[0].getPose(refSpace);
-      if(pose){
-        reticle.visible = true;
-        reticle.matrix.fromArray(pose.transform.matrix);
-      }
+      reticle.visible = true;
+      reticle.matrix.fromArray(pose.transform.matrix);
     } else {
       reticle.visible = false;
     }
   }
-
-  if(frame && anchorSpace){
-    const aPose = frame.getPose(anchorSpace, refSpace);
-    if(aPose){
-      root.matrix.fromArray(aPose.transform.matrix);
-      root.matrix.decompose(root.position, root.quaternion, root.scale);
-    }
-  }
-
   splat?.update?.();
   renderer.render(scene, camera);
 });
 
+// --------- Resize ---------
 addEventListener('resize', ()=>{
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
+
+// quick HEAD check (helps debug 404s)
+try{
+  const r = await fetch(MODEL,{method:'HEAD'});
+  log("model HEAD:", r.status);
+}catch(e){ log("HEAD error:", e?.message||e); }
 </script>
+</body>
+</html>
