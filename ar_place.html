@@ -1,98 +1,91 @@
-﻿<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Avatar Splat – AR (hit-test)</title>
-
-  <!-- same import map style as your ar_avatar.html -->
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "./lib/three.module.js",
-      "@mkkellogg/gaussian-splats-3d": "./lib/gaussian-splats-3d.module.js"
-    }
-  }
-  </script>
-
-  <style>
-    html,body{margin:0;height:100%;overflow:hidden;background:#111}
-    #enter{position:fixed;left:12px;bottom:12px;z-index:10;padding:10px 14px;border:0;border-radius:8px;background:#0a84ff;color:#fff;font:600 14px system-ui}
-    #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui,Arial;white-space:pre-wrap}
-  </style>
-</head>
-<body>
-<button id="enter">Enter AR</button>
-<div id="log">loading…</div>
-
+﻿<!doctype html><html><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Avatar Splat – AR (hit-test)</title>
+<script type="importmap">{"imports":{
+  "three":"./lib/three.module.js",
+  "@mkkellogg/gaussian-splats-3d":"./lib/gaussian-splats-3d.module.js"
+}}</script>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#111}
+  #enter{position:fixed;left:12px;bottom:12px;padding:10px 14px;border:0;border-radius:8px;background:#0a84ff;color:#fff;font:600 14px system-ui}
+  #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui;white-space:pre-wrap}
+</style>
+</head><body>
+<button id="enter">Enter AR</button><div id="log">loading…</div>
 <script type="module">
 import * as THREE from "three";
 import * as G from "@mkkellogg/gaussian-splats-3d";
-
 const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
 
-// Three scene (so we can do hit-test like a VR page)
 const scene=new THREE.Scene();
-const camera=new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
-const renderer=new THREE.WebGLRenderer({alpha:true, antialias:false});
-renderer.setSize(innerWidth, innerHeight);
-renderer.xr.enabled=true;
-document.body.appendChild(renderer.domElement);
+const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,0.01,50);
+const renderer=new THREE.WebGLRenderer({alpha:true});renderer.xr.enabled=true;
+renderer.setSize(innerWidth,innerHeight);document.body.appendChild(renderer.domElement);
 
-// Group we’ll move to the hit-test pose
-const root=new THREE.Group(); scene.add(root);
+// WORLD-LOCKED root we’ll move with hit-test (this is why it won’t follow your head)
+const root=new THREE.Group();scene.add(root);
 
-// Reticle
+// a visible reticle so you know where you’ll place it
 const reticle=new THREE.Mesh(
   new THREE.RingGeometry(0.08,0.1,32).rotateX(-Math.PI/2),
   new THREE.MeshBasicMaterial({color:0xffffff})
 );
-reticle.matrixAutoUpdate=false; reticle.visible=false; scene.add(reticle);
+reticle.matrixAutoUpdate=false;reticle.visible=false;scene.add(reticle);
 
-// We’ll create/load the splat AFTER AR starts (more reliable on phones)
-const MODEL_URL="./assets/data/Shakti-edit.ksplat";
-let splat=null;
+// === your model ===
+const MODEL="./assets/data/Shakti-edit.ksplat";
+let splat=null, session, refSpace, viewerSpace, hitSource, placed=false;
 
-let session, refSpace, viewerSpace, hitSource, placed=false;
+// 90° rotation helper — choose the axis you need
+// X axis  +90°  -> [0.7071, 0, 0, 0.7071]
+// Y axis  +90°  -> [0, 0.7071, 0, 0.7071]
+// Z axis  +90°  -> [0, 0, 0.7071, 0.7071]
+const ROT_90_X = [0.7071, 0, 0, 0.7071];
 
-async function startAR(){
-  if(!navigator.xr){ alert("WebXR not available on this device"); return; }
+document.getElementById('enter').addEventListener('click', start, {passive:true});
 
-  // Start AR first (this matches the feel of your ar_avatar page)
-  session=await navigator.xr.requestSession('immersive-ar',{
-    requiredFeatures:['hit-test','local-floor'],
-    optionalFeatures:['dom-overlay'],
-    domOverlay:{root:document.body}
-  });
-  renderer.xr.setReferenceSpaceType('local-floor');
-  await renderer.xr.setSession(session);
-  refSpace    = await session.requestReferenceSpace('local-floor');
-  viewerSpace = await session.requestReferenceSpace('viewer');
-  hitSource   = await session.requestHitTestSource({space:viewerSpace});
-  document.getElementById('enter').remove();
-  log("AR session started ✔  loading model…");
+async function start(){
+  if(!navigator.xr){alert("WebXR not available");return;}
+  try{
+    log('requesting AR…');
+    session=await navigator.xr.requestSession('immersive-ar',{
+      requiredFeatures:['hit-test','local-floor'],
+      optionalFeatures:['dom-overlay'], domOverlay:{root:document.body}
+    });
+    renderer.xr.setReferenceSpaceType('local-floor'); await renderer.xr.setSession(session);
+    refSpace=await session.requestReferenceSpace('local-floor');
+    viewerSpace=await session.requestReferenceSpace('viewer');
+    hitSource=await session.requestHitTestSource({space:viewerSpace});
+    document.getElementById('enter').remove();
+    log('AR session ✔  loading model…');
 
-  // NOW load the splat
-  splat=new G.DropInViewer({gpuAcceleratedSort:true, enableSIMDInSort:true});
-  await splat.addSplatScenes([{ path: MODEL_URL, showLoadingUI:true, splatAlphaRemovalThreshold:5 }]);
-  splat.scale.set(0.6,0.6,0.6);  // adjust as needed
-  root.add(splat);
-  log("model ready — move phone to find a surface, then tap to place");
+    // SAFE settings to avoid long stalls on some mobiles
+    splat=new G.DropInViewer({sharedMemoryForWorkers:false,gpuAcceleratedSort:false,enableSIMDInSort:false});
+
+    await splat.addSplatScenes([{
+      path:MODEL, showLoadingUI:true, splatAlphaRemovalThreshold:5,
+      rotation: ROT_90_X,           // <— 90° rotate (change to the axis you want)
+    }]);
+
+    // default scale (adjust if too big/small)
+    splat.scale.set(1.0,1.0,1.0);
+    root.add(splat);
+    log('model ready — move phone to find a surface, then tap to place');
+  }catch(e){log('ERROR:', e?.message||e); console.error(e);}
 }
-document.getElementById('enter').addEventListener('click', startAR);
 
-// Tap to place / re-place (support both click and touch)
-function placeOrUnlock(){
-  if(!session || !splat) return;
+function place(){ if(!session||!splat) return;
   if(reticle.visible){
-    reticle.matrix.decompose(root.position, root.quaternion, root.scale);
-    placed=true; reticle.visible=false; log("placed ✔  tap empty space to re-place");
-  }else if(placed){ placed=false; log("placement unlocked — move to new plane"); }
+    // copy reticle world transform into our root group (world-locked)
+    reticle.matrix.decompose(root.position,root.quaternion,root.scale);
+    placed=true; reticle.visible=false; log('placed ✔  tap empty space to re-place');
+  } else if(placed){
+    placed=false; log('placement unlocked');
+  }
 }
-window.addEventListener('click', placeOrUnlock, {passive:true});
-window.addEventListener('touchend', placeOrUnlock, {passive:true});
+addEventListener('click', place,{passive:true});
+addEventListener('touchend', place,{passive:true});
 
-// Animation loop with hit-test
 renderer.setAnimationLoop((t,frame)=>{
   if(frame && hitSource && !placed){
     const hits=frame.getHitTestResults(hitSource);
@@ -100,20 +93,15 @@ renderer.setAnimationLoop((t,frame)=>{
       const pose=hits[0].getPose(refSpace);
       reticle.visible=true;
       reticle.matrix.fromArray(pose.transform.matrix);
-    }else reticle.visible=false;
+    } else reticle.visible=false;
   }
-  splat?.update?.();
-  renderer.render(scene,camera);
+  splat?.update?.(); renderer.render(scene,camera);
 });
 
-// Resize
-addEventListener('resize', ()=>{
+addEventListener('resize',()=>{
   camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+  renderer.setSize(innerWidth,innerHeight);
 });
 
-// Quick HEAD fetch so you’ll see 200/404 in the green log
-try{ const r=await fetch(MODEL_URL,{method:'HEAD'}); log("model:", r.status); }catch(e){ log("model error:", e?.message||e); }
-</script>
-</body>
-</html>
+try{const r=await fetch(MODEL,{method:'HEAD'});log('model:',r.status);}catch(e){log('model err:',e.message||e)}
+</script></body></html>
