@@ -31,7 +31,7 @@ const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.text
 
 // --------- Config ---------
 const MODEL = "./assets/data/Shakti-edit.ksplat";
-const PLACE_OFFSET = 0.8; // meters in front of reticle/camera
+const PLACE_OFFSET = 0.2; // meters in front of reticle/camera
 
 // Helper: Euler (radians) -> quaternion array
 const qFromEuler = (x=0,y=0,z=0)=>
@@ -40,7 +40,7 @@ const qFromEuler = (x=0,y=0,z=0)=>
 // ORIENTATION: stand upright (was lying on the floor before)
 // -90° around X stands the model up.
 // If it faces the wrong way, try ROT_STAND_YAW = qFromEuler(-Math.PI/2, Math.PI, 0)
-const ROT_STAND = qFromEuler(Math.PI/2, 0, 0);
+const ROT_STAND = qFromEuler(Math.PI/2, Math.PI, 0);
 // const ROT_STAND_YAW = qFromEuler(-Math.PI/2, Math.PI, 0); // optional 180° turn
 
 // --------- Three.js scene ---------
@@ -85,7 +85,7 @@ let placed=false;
       // rotation: ROT_STAND_YAW // use this line instead if it faces backward
     }]);
 
-    splat.scale.set(0.10, 0.10, 0.10); // smaller
+    splat.scale.set(0.05, 0.05, 0.05); // smaller
     splat.visible = false;
     root.add(splat);
     log("model preloaded ✔  tap Enter AR");
