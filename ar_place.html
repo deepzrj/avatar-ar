@@ -1,0 +1,108 @@
+﻿<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Splat – AR (plane detect)</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./lib/three.module.js",
+      "@mkkellogg/gaussian-splats-3d": "./lib/gaussian-splats-3d.module.js"
+    }
+  }
+  </script>
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#111}
+    #enter{position:fixed;left:12px;bottom:12px;z-index:10;padding:10px 14px;border:0;border-radius:8px;background:#0a84ff;color:#fff;font:600 14px system-ui}
+    #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui,Arial;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+<button id="enter">Enter AR</button>
+<div id="log">loading…</div>
+
+<script type="module">
+import * as THREE from "three";
+import * as G from "@mkkellogg/gaussian-splats-3d";
+const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
+
+// three.js scene we control
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
+const renderer=new THREE.WebGLRenderer({alpha:true, antialias:false});
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled=true;
+document.body.appendChild(renderer.domElement);
+
+// group we move to hit-test pose
+const root=new THREE.Group(); scene.add(root);
+
+// reticle
+const reticle=new THREE.Mesh(
+  new THREE.RingGeometry(0.08,0.1,32).rotateX(-Math.PI/2),
+  new THREE.MeshBasicMaterial({color:0xffffff})
+);
+reticle.matrixAutoUpdate=false; reticle.visible=false; scene.add(reticle);
+
+// load your ksplat
+const MODEL_URL="./assets/data/Shakti-edit.ksplat";
+const splat=new G.DropInViewer({gpuAcceleratedSort:true, enableSIMDInSort:true});
+await splat.addSplatScenes([{ path: MODEL_URL, showLoadingUI:true, splatAlphaRemovalThreshold:5 }]);
+splat.scale.set(0.6,0.6,0.6); // tweak size
+root.add(splat);
+
+// WebXR hit-test
+let session, refSpace, viewerSpace, hitSource, placed=false;
+
+async function startAR(){
+  if(!navigator.xr){ alert("WebXR not available"); return; }
+  session=await navigator.xr.requestSession('immersive-ar',{
+    requiredFeatures:['hit-test','local-floor'],
+    optionalFeatures:['dom-overlay'],
+    domOverlay:{root:document.body}
+  });
+  renderer.xr.setReferenceSpaceType('local-floor');
+  await renderer.xr.setSession(session);
+  refSpace    = await session.requestReferenceSpace('local-floor');
+  viewerSpace = await session.requestReferenceSpace('viewer');
+  hitSource   = await session.requestHitTestSource({space:viewerSpace});
+  document.getElementById('enter').remove();
+  log("AR started ✔  move to find a surface, tap to place");
+}
+document.getElementById('enter').addEventListener('click', startAR);
+
+// tap to place / re-place
+window.addEventListener('click', () => {
+  if(!session) return;
+  if(reticle.visible){
+    reticle.matrix.decompose(root.position, root.quaternion, root.scale);
+    placed=true; reticle.visible=false; log("placed ✔  tap empty space to re-place");
+  }else if(placed){ placed=false; log("placement unlocked — move to new plane"); }
+});
+
+// animate
+renderer.setAnimationLoop((t,frame)=>{
+  if(frame && hitSource && !placed){
+    const hits=frame.getHitTestResults(hitSource);
+    if(hits.length){
+      const pose=hits[0].getPose(refSpace);
+      reticle.visible=true;
+      reticle.matrix.fromArray(pose.transform.matrix);
+    }else reticle.visible=false;
+  }
+  splat.update?.();
+  renderer.render(scene,camera);
+});
+
+// resize
+addEventListener('resize', ()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// sanity check asset reachable
+try{ const r=await fetch(MODEL_URL,{method:'HEAD'}); log("model:", r.status); }catch(e){ log("model error:", e?.message||e); }
+</script>
+</body>
+</html>
