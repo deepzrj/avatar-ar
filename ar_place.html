@@ -1,107 +1,179 @@
-﻿<!doctype html><html><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Avatar Splat – AR (hit-test)</title>
-<script type="importmap">{"imports":{
-  "three":"./lib/three.module.js",
-  "@mkkellogg/gaussian-splats-3d":"./lib/gaussian-splats-3d.module.js"
-}}</script>
-<style>
-  html,body{margin:0;height:100%;overflow:hidden;background:#111}
-  #enter{position:fixed;left:12px;bottom:12px;padding:10px 14px;border:0;border-radius:8px;background:#0a84ff;color:#fff;font:600 14px system-ui}
-  #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui;white-space:pre-wrap}
-</style>
-</head><body>
-<button id="enter">Enter AR</button><div id="log">loading…</div>
+﻿<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Avatar Splat – AR (plane detect + tap to place)</title>
+
+  <!-- import map -->
+  <script type="importmap">{
+    "imports":{
+      "three":"./lib/three.module.js",
+      "@mkkellogg/gaussian-splats-3d":"./lib/gaussian-splats-3d.module.js"
+    }
+  }</script>
+
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#111;touch-action:none}
+    #enter{position:fixed;left:12px;bottom:12px;padding:10px 14px;border:0;border-radius:10px;background:#0a84ff;color:#fff;font:600 14px system-ui}
+    #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui;white-space:pre-wrap}
+    canvas{display:block}
+  </style>
+</head>
+<body>
+<button id="enter">Enter AR</button>
+<div id="log">loading…</div>
+
 <script type="module">
 import * as THREE from "three";
 import * as G from "@mkkellogg/gaussian-splats-3d";
-const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
 
-const scene=new THREE.Scene();
-const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,0.01,50);
-const renderer=new THREE.WebGLRenderer({alpha:true});renderer.xr.enabled=true;
-renderer.setSize(innerWidth,innerHeight);document.body.appendChild(renderer.domElement);
+const log=(...a)=>{const e=document.getElementById('log'); e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
 
-// WORLD-LOCKED root we’ll move with hit-test (this is why it won’t follow your head)
-const root=new THREE.Group();scene.add(root);
+// ---------- Config ----------
+const MODEL = "./assets/data/Shakti-edit.ksplat";  // your ksplat file
+// If you want to sanity-check with a tiny public model, use:
+// const MODEL = "https://cdn.jsdelivr.net/gh/mkkellogg/GaussianSplats3D@main/demos/assets/data/bonsai/bonsai_high.ksplat";
 
-// a visible reticle so you know where you’ll place it
-const reticle=new THREE.Mesh(
-  new THREE.RingGeometry(0.08,0.1,32).rotateX(-Math.PI/2),
+// 90° rotation helpers (pick one):
+const ROT_90_X = [0.7071, 0,      0,      0.7071]; // stand up if lying on floor
+const ROT_90_Y = [0,      0.7071, 0,      0.7071]; // turn left/right
+const ROT_90_Z = [0,      0,      0.7071, 0.7071]; // roll
+
+// ---------- Three.js scene ----------
+const scene   = new THREE.Scene();
+const camera  = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
+const renderer= new THREE.WebGLRenderer({alpha:true, antialias:true});
+renderer.xr.enabled = true;
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// Root group we will place with the hit-test pose (keeps world-locked)
+const root = new THREE.Group();
+scene.add(root);
+
+// Reticle to show placement point
+const reticle = new THREE.Mesh(
+  new THREE.RingGeometry(0.08, 0.1, 32).rotateX(-Math.PI/2),
   new THREE.MeshBasicMaterial({color:0xffffff})
 );
-reticle.matrixAutoUpdate=false;reticle.visible=false;scene.add(reticle);
+reticle.matrixAutoUpdate = false;
+reticle.visible = false;
+scene.add(reticle);
 
-// === your model ===
-const MODEL="./assets/data/Shakti-edit.ksplat";
-let splat=null, session, refSpace, viewerSpace, hitSource, placed=false;
+// ---------- Splat (DropInViewer inside Three scene) ----------
+let splat = null;
+let session, refSpace, viewerSpace, hitSource;
+let placed = false;
 
-// 90° rotation helper — choose the axis you need
-// X axis  +90°  -> [0.7071, 0, 0, 0.7071]
-// Y axis  +90°  -> [0, 0.7071, 0, 0.7071]
-// Z axis  +90°  -> [0, 0, 0.7071, 0.7071]
-const ROT_90_X = [0.7071, 0, 0, 0.7071];
-
-document.getElementById('enter').addEventListener('click', start, {passive:true});
-
-async function start(){
-  if(!navigator.xr){alert("WebXR not available");return;}
-  try{
-    log('requesting AR…');
-    session=await navigator.xr.requestSession('immersive-ar',{
-      requiredFeatures:['hit-test','local-floor'],
-      optionalFeatures:['dom-overlay'], domOverlay:{root:document.body}
+// Load the splat EARLY so it’s ready when AR starts (no spinner)
+(async () => {
+  try {
+    log("preloading model…");
+    splat = new G.DropInViewer({
+      sharedMemoryForWorkers: false,
+      gpuAcceleratedSort: false,
+      enableSIMDInSort: false,
+      // no showLoadingUI, so the spinner won’t block taps
     });
-    renderer.xr.setReferenceSpaceType('local-floor'); await renderer.xr.setSession(session);
-    refSpace=await session.requestReferenceSpace('local-floor');
-    viewerSpace=await session.requestReferenceSpace('viewer');
-    hitSource=await session.requestHitTestSource({space:viewerSpace});
-    document.getElementById('enter').remove();
-    log('AR session ✔  loading model…');
-
-    // SAFE settings to avoid long stalls on some mobiles
-    splat=new G.DropInViewer({sharedMemoryForWorkers:false,gpuAcceleratedSort:false,enableSIMDInSort:false});
 
     await splat.addSplatScenes([{
-      path:MODEL, showLoadingUI:true, splatAlphaRemovalThreshold:5,
-      rotation: ROT_90_X,           // <— 90° rotate (change to the axis you want)
+      path: MODEL,
+      splatAlphaRemovalThreshold: 5,
+      rotation: ROT_90_X,         // <— rotate 90° around X; switch if needed
     }]);
 
-    // default scale (adjust if too big/small)
-    splat.scale.set(1.0,1.0,1.0);
+    // start smaller; you can scale after placement too
+    splat.scale.set(0.8, 0.8, 0.8);
+    splat.visible = false;        // show only after placement
     root.add(splat);
-    log('model ready — move phone to find a surface, then tap to place');
-  }catch(e){log('ERROR:', e?.message||e); console.error(e);}
-}
+    log("model preloaded ✔  tap Enter AR");
+  } catch (e) {
+    log("load ERROR:", e?.message||e);
+    console.error(e);
+  }
+})();
 
-function place(){ if(!session||!splat) return;
-  if(reticle.visible){
-    // copy reticle world transform into our root group (world-locked)
-    reticle.matrix.decompose(root.position,root.quaternion,root.scale);
-    placed=true; reticle.visible=false; log('placed ✔  tap empty space to re-place');
-  } else if(placed){
-    placed=false; log('placement unlocked');
+// ---------- AR start ----------
+document.getElementById('enter').addEventListener('click', async () => {
+  if (!navigator.xr) { alert("WebXR not available"); return; }
+
+  try {
+    session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures: ['hit-test', 'local-floor'],
+      optionalFeatures: ['dom-overlay'],
+      domOverlay: { root: document.body }
+    });
+
+    renderer.xr.setReferenceSpaceType('local-floor');
+    await renderer.xr.setSession(session);
+
+    refSpace    = await session.requestReferenceSpace('local-floor');
+    viewerSpace = await session.requestReferenceSpace('viewer');
+    hitSource   = await session.requestHitTestSource({space: viewerSpace});
+
+    // XR controller "select" is the most reliable placement trigger
+    session.addEventListener('select', placeFromReticle);
+    document.getElementById('enter').remove();
+    log("AR session started ✔  move phone to find a surface, then tap to place");
+
+  } catch (e) {
+    log("AR start ERROR:", e?.message||e);
+    console.error(e);
+  }
+}, {passive:true});
+
+// Fallback: screen taps as well (outside XR input)
+addEventListener('pointerup', placeFromReticle, {passive:true});
+addEventListener('touchend', placeFromReticle, {passive:true});
+
+// Place or unlock placement
+function placeFromReticle() {
+  if (!session || !splat) return;
+  if (reticle.visible) {
+    // copy reticle world transform into root (=> world-locked)
+    reticle.matrix.decompose(root.position, root.quaternion, root.scale);
+    splat.visible = true;
+    placed = true;
+    reticle.visible = false;
+    log("placed ✔  tap again in empty space to unlock & re-place");
+  } else if (placed) {
+    placed = false;
+    log("placement unlocked — move to a new spot and tap again");
   }
 }
-addEventListener('click', place,{passive:true});
-addEventListener('touchend', place,{passive:true});
 
-renderer.setAnimationLoop((t,frame)=>{
-  if(frame && hitSource && !placed){
-    const hits=frame.getHitTestResults(hitSource);
-    if(hits.length){
-      const pose=hits[0].getPose(refSpace);
-      reticle.visible=true;
+// ---------- Frame loop with hit-test ----------
+renderer.setAnimationLoop((t, frame) => {
+  if (frame && hitSource && !placed) {
+    const hits = frame.getHitTestResults(hitSource);
+    if (hits.length) {
+      const pose = hits[0].getPose(refSpace);
+      reticle.visible = true;
       reticle.matrix.fromArray(pose.transform.matrix);
-    } else reticle.visible=false;
+    } else {
+      reticle.visible = false;
+    }
   }
-  splat?.update?.(); renderer.render(scene,camera);
+  splat?.update?.();
+  renderer.render(scene, camera);
 });
 
-addEventListener('resize',()=>{
-  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth,innerHeight);
+// ---------- Resize ----------
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
 });
 
-try{const r=await fetch(MODEL,{method:'HEAD'});log('model:',r.status);}catch(e){log('model err:',e.message||e)}
-</script></body></html>
+// Quick HEAD check so you see 200/404 in the log
+try {
+  const r = await fetch(MODEL, {method:"HEAD"});
+  log("model HEAD:", r.status);
+} catch (e) {
+  log("HEAD error:", e?.message||e);
+}
+</script>
+</body>
+</html>
