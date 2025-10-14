@@ -4,6 +4,17 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Avatar Splat – AR</title>
+
+  <!-- import map so "three" and the library resolve on GitHub Pages -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./lib/three.module.js",
+      "@mkkellogg/gaussian-splats-3d": "./lib/gaussian-splats-3d.module.js"
+    }
+  }
+  </script>
+
   <style>
     html,body{margin:0;height:100%;overflow:hidden;background:#111}
     #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui,Arial;white-space:pre-wrap}
@@ -11,35 +22,39 @@
 </head>
 <body>
 <div id="log">loading…</div>
+
 <script type="module">
-  const log=(...a)=>{document.getElementById('log').textContent+='\n'+a.join(' ');}
-  ;(async()=>{try{
-    const G = await import('./lib/gaussian-splats-3d.module.js');
-    await import('./lib/three.module.js');
-    log('library loaded ✔');
+  import * as G from "@mkkellogg/gaussian-splats-3d";
+  import * as THREE from "three";
+  const log=(...a)=>{document.getElementById('log').textContent+='\n'+a.join(' ');};
 
-    const MODEL_URL = './assets/data/Shakti-edit.ksplat'; // change if your filename differs
-    const r = await fetch(MODEL_URL); log('fetch status:', r.status); // expect 200
+  (async()=>{
+    try{
+      log("library loaded ✔");
 
-    const viewer = new G.Viewer({
-      webXRMode: G.WebXRMode.AR,          // shows "Enter AR" on mobile
-      sharedMemoryForWorkers: false,      // important for GitHub Pages
-      gpuAcceleratedSort: true,
-      enableSIMDInSort: true,
-      cameraUp: [0,1,0],
-      initialCameraPosition: [0,1.6,2],
-      initialCameraLookAt: [0,1.2,0],
-    });
+      const MODEL_URL = "./assets/data/Shakti-edit.ksplat";   // your file
+      const r = await fetch(MODEL_URL); log("fetch status:", r.status); // expect 200
 
-    await viewer.addSplatScene(MODEL_URL, {
-      position: [0,0,-1.2],               // ~1.2 m in front
-      scale: [1,1,1],                     // tweak later (e.g., [2,2,2])
-      showLoadingUI: true,
-      splatAlphaRemovalThreshold: 5
-    });
+      const viewer = new G.Viewer({
+        webXRMode: G.WebXRMode.AR,
+        sharedMemoryForWorkers: false,
+        gpuAcceleratedSort: true,
+        enableSIMDInSort: true,
+        cameraUp: [0,1,0],
+        initialCameraPosition: [0,1.6,2],
+        initialCameraLookAt: [0,1.2,0],
+      });
 
-    viewer.start(); log('ready — publish, open on Android, tap Enter AR ✔');
-  }catch(e){ log('ERROR:', e?.message || e); console.error(e); }})();
+      await viewer.addSplatScene(MODEL_URL, {
+        position: [0,0,-1.2],
+        scale: [1,1,1],
+        showLoadingUI: true,
+        splatAlphaRemovalThreshold: 5
+      });
+
+      viewer.start(); log("ready — open on Android and tap Enter AR ✔");
+    }catch(e){ log("ERROR:", e?.message || e); console.error(e); }
+  })();
 </script>
 </body>
 </html>
