@@ -21,7 +21,7 @@
   </style>
 </head>
 <body>
-<button id="enter">Enter AR</button>
+
 <div id="log">loading…</div>
 
 <script type="module">
@@ -44,20 +44,16 @@ const viewer = new G.Viewer({
 // place model ~2 meters in front of AR origin (world-locked)
 await viewer.addSplatScene(MODEL, {
   showLoadingUI: true,
-  position: [0, 0, -2.0],                // adjust distance
+  position: [0, 0, -1.2],                // adjust distance
   rotation: [0, 0, 0],
-  scale: [0.6, 0.6, 0.6],
+  scale: [1.2, 1.2, 1.2],
   splatAlphaRemovalThreshold: 5
 });
-
-document.getElementById('enter').addEventListener('click', async ()=>{
-  try{
-    // start viewer render loop and enter AR
-    await viewer.start();
-    log('viewer started ✔  entering AR…');
-    if (viewer.enterAR) { await viewer.enterAR(); } // some builds expose this
-  }catch(e){ log('ERROR:', e?.message||e); console.error(e); }
-});
+(async()=>{
+// Start the viewer immediately; it will show its own grey "START AR" button.
+   await viewer.start();
+   log('viewer started ✔  tap the grey START AR button');
+ })();
 
 // quick HEAD check so you see 200/404 in the log
 try{ const r=await fetch(MODEL,{method:'HEAD'}); log('model:', r.status); }catch(e){ log('model error:', e?.message||e); }
