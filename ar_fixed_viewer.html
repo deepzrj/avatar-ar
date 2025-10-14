@@ -16,7 +16,6 @@
 
   <style>
     html,body{margin:0;height:100%;overflow:hidden;background:#111}
-    /* removed #enter (no extra button now) */
     #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui,Arial;white-space:pre-wrap}
   </style>
 </head>
@@ -27,9 +26,10 @@
 import * as G from "@mkkellogg/gaussian-splats-3d";
 const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
 
-const MODEL = "./assets/data/Shakti-edit.ksplat";
+const MODEL="./assets/data/Shakti-edit.ksplat";
+log("boot ✔");
 
-// Let the library own WebXR (keeps the splat world-locked)
+// 1) Create viewer that OWNS AR
 const viewer = new G.Viewer({
   webXRMode: G.WebXRMode.AR,
   sharedMemoryForWorkers: false,
@@ -40,26 +40,31 @@ const viewer = new G.Viewer({
   initialCameraLookAt: [0,1.2,-1]
 });
 
-// Put the model close and big so it's easy to see
-await viewer.addSplatScene(MODEL, {
-  showLoadingUI: true,
-  position: [0, 0, -1.2],          // distance straight ahead
-  scale: [1.2, 1.2, 1.2],          // size
-  splatAlphaRemovalThreshold: 5
-});
+// 2) Add the splat VERY close and LARGE so it's hard to miss
+try{
+  await viewer.addSplatScene(MODEL, {
+    showLoadingUI: true,
+    position: [0, 0.1, -0.8],   // 80 cm in front, 10 cm up
+    scale: [1.8, 1.8, 1.8],     // big
+    splatAlphaRemovalThreshold: 5
+  });
+  log("splat added ✔");
+}catch(e){
+  log("addSplatScene ERROR:", e?.message||e);
+}
 
-// Start the viewer immediately; use the built-in grey "START AR" button
-(async () => {
+// 3) Start viewer immediately; use the viewer's GREY “START AR” button
+(async ()=>{
   await viewer.start();
-  log("viewer started ✔  tap the grey START AR button");
+  log("viewer started ✔  tap the GREY 'START AR' button");
 })();
 
 // quick HEAD check
-try {
-  const r = await fetch(MODEL, {method:"HEAD"});
-  log("model:", r.status);
-} catch (e) {
-  log("model error:", e?.message || e);
+try{
+  const r=await fetch(MODEL,{method:"HEAD"});
+  log("model HEAD:", r.status);
+}catch(e){
+  log("model HEAD error:", e?.message || e);
 }
 </script>
 </body>
