@@ -1,29 +1,4 @@
-﻿<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Avatar Splat – AR (anchored plane place)</title>
-
-  <script type="importmap">{
-    "imports":{
-      "three":"./lib/three.module.js",
-      "@mkkellogg/gaussian-splats-3d":"./lib/gaussian-splats-3d.module.js"
-    }
-  }</script>
-
-  <style>
-    html,body{margin:0;height:100%;overflow:hidden;background:#111;touch-action:none}
-    #enter{position:fixed;left:12px;bottom:12px;padding:10px 14px;border:0;border-radius:10px;background:#0a84ff;color:#fff;font:600 14px system-ui}
-    #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui;white-space:pre-wrap}
-    canvas{display:block}
-  </style>
-</head>
-<body>
-<button id="enter">Enter AR</button>
-<div id="log">loading…</div>
-
-<script type="module">
+﻿<script type="module">
 import * as THREE from "three";
 import * as G from "@mkkellogg/gaussian-splats-3d";
 
@@ -31,15 +6,11 @@ const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.text
 
 // ------- model & orientation -------
 const MODEL = "./assets/data/Shakti-edit.ksplat";
-
-// helper: Euler (radians) -> quaternion array
 const qFromEuler = (x=0,y=0,z=0)=>
   new THREE.Quaternion().setFromEuler(new THREE.Euler(x,y,z)).toArray();
+const ROT_STAND_FACE = qFromEuler(Math.PI/2, Math.PI, 0); // upright + face viewer
 
-// Upright AND facing the viewer: +90° around X (upright) and +180° yaw around Y (turn to face).
-const ROT_STAND_FACE = qFromEuler(Math.PI/2, Math.PI, 0);
-
-// ------- three.js scene -------
+// ------- three.js -------
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
 const renderer = new THREE.WebGLRenderer({alpha:true, antialias:true});
@@ -48,11 +19,9 @@ renderer.setPixelRatio(devicePixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// world-locked root that will be driven by hit/anchor pose
 const root = new THREE.Group();
 scene.add(root);
 
-// simple reticle
 const reticle = new THREE.Mesh(
   new THREE.RingGeometry(0.06, 0.085, 32).rotateX(-Math.PI/2),
   new THREE.MeshBasicMaterial({color:0xffffff})
@@ -61,10 +30,10 @@ reticle.matrixAutoUpdate = false;
 reticle.visible = false;
 scene.add(reticle);
 
-// ------- splat viewer (as a single object) -------
 let splat=null, session, refSpace, viewerSpace, hitSource;
 let placed=false, anchorSpace=null;
 
+// ---------- preload the model ----------
 (async()=>{
   try{
     log("preloading model…");
@@ -73,105 +42,106 @@ let placed=false, anchorSpace=null;
       gpuAcceleratedSort:false,
       enableSIMDInSort:false
     });
-
     await splat.addSplatScenes([{
       path: MODEL,
       splatAlphaRemovalThreshold: 5,
-      rotation: ROT_STAND_FACE   // upright + face camera
+      rotation: ROT_STAND_FACE
     }]);
-
-    // make it smaller (tweak to taste)
     splat.scale.set(0.08, 0.08, 0.08);
     splat.visible = false;
-
-    // ensure no extra local offset relative to root
     splat.position.set(0,0,0);
     splat.quaternion.identity();
-
     root.add(splat);
+
+    // quick HEAD to confirm file path works
+    try{ const r=await fetch(MODEL,{method:'HEAD'}); log("model HEAD:", r.status); }catch(e){ log("HEAD error:", e?.message||e); }
+
     log("model preloaded ✔  tap Enter AR");
   }catch(e){ log("load ERROR:", e?.message||e); console.error(e); }
 })();
 
-// ------- start AR with anchors if available -------
-document.getElementById('enter').addEventListener('click', startAR, {passive:true});
+// ---------- support probe & button ----------
+const btn = document.getElementById('enter');
+btn.addEventListener('click', startAR, {passive:true});
 
-async function startAR(){
-  if(!navigator.xr){ alert("WebXR not available"); return; }
+(async ()=>{
+  if(!('xr' in navigator)){ log("WebXR not present in navigator — AR not available"); return; }
   try{
-    const supportsAnchors = await navigator.xr.isSessionSupported?.('immersive-ar')
-      .then(()=>true).catch(()=>true); // safe probe
+    const supported = await navigator.xr.isSessionSupported('immersive-ar');
+    log("isSessionSupported(immersive-ar):", supported ? "yes" : "no");
+    if(!supported) log("Tip: update Chrome & ARCore, allow Camera permission.");
+  }catch(e){ log("support probe error:", e?.message||e); }
+})();
+
+// ---------- start AR ----------
+async function startAR(){
+  try{
+    if(!navigator.xr){ log("No navigator.xr — cannot start AR"); return; }
 
     session = await navigator.xr.requestSession('immersive-ar',{
       requiredFeatures:['hit-test','local-floor'],
-      // anchors greatly reduce drift; we request them but still work without
       optionalFeatures:['anchors','dom-overlay'],
       domOverlay:{root:document.body}
     });
+    log("AR session requested ✔");
 
     renderer.xr.setReferenceSpaceType('local-floor');
     await renderer.xr.setSession(session);
-
     refSpace    = await session.requestReferenceSpace('local-floor');
     viewerSpace = await session.requestReferenceSpace('viewer');
     hitSource   = await session.requestHitTestSource({space:viewerSpace});
+    log("AR session started ✔  move to find a surface, then tap to place");
 
     session.addEventListener('select', placeOnce);
     addEventListener('pointerup', placeOnce, {passive:true});
     addEventListener('touchend', placeOnce, {passive:true});
 
-    document.getElementById('enter').remove();
-    log("AR session started ✔  move phone to find a surface, then tap to place");
-  }catch(e){ log("AR start ERROR:", e?.message||e); console.error(e); }
+    btn.remove();
+  }catch(e){
+    log("AR start ERROR:", e?.message||e);
+    console.error(e);
+    // common: "The device does not support session type 'immersive-ar'"
+    log("If denied earlier: Site settings → Camera = Allow, and ensure ARCore is installed.");
+  }
 }
 
-// place exactly at the reticle pose; if anchors are supported, create one
-async function placeOnce(ev){
+// ---------- place once (anchors if available) ----------
+async function placeOnce(){
   if(!session || !splat || placed) return;
-
-  // we need the latest hit pose for this frame
   const frame = renderer.xr.getFrame();
   if(!frame || !hitSource) return;
 
   const hits = frame.getHitTestResults(hitSource);
-  if(!hits.length) return;
+  if(!hits.length){ log("no hit yet — keep moving phone"); return; }
 
   const hit = hits[0];
   const pose = hit.getPose(refSpace);
   if(!pose) return;
 
-  // If anchors supported, create and track via anchorSpace
-  if (hit.createAnchor) {
-    try {
+  if(hit.createAnchor){
+    try{
       const anchor = await hit.createAnchor(pose);
-      anchorSpace  = anchor.anchorSpace;
-      placed = true;
-      splat.visible = true;
-      reticle.visible = false;
+      anchorSpace = anchor.anchorSpace;
+      placed = true; splat.visible = true; reticle.visible = false;
       log("placed ✔ (anchored)");
-      // stop listening for more taps
       session.removeEventListener('select', placeOnce);
       removeEventListener('pointerup', placeOnce);
       removeEventListener('touchend', placeOnce);
       return;
-    } catch(e) {
-      console.warn("Anchor create failed, fallback to static pose:", e);
-    }
+    }catch(e){ log("anchor failed, using static pose"); console.warn(e); }
   }
 
-  // Fallback: freeze at current pose (no anchor)
+  // fallback: static pose (less stable than anchors)
   root.matrix.fromArray(pose.transform.matrix);
   root.matrix.decompose(root.position, root.quaternion, root.scale);
-  placed = true;
-  splat.visible = true;
-  reticle.visible = false;
+  placed = true; splat.visible = true; reticle.visible = false;
   log("placed ✔");
   session.removeEventListener('select', placeOnce);
   removeEventListener('pointerup', placeOnce);
   removeEventListener('touchend', placeOnce);
 }
 
-// ------- frame loop: reticle + (when anchored) update from anchor pose -------
+// ---------- frame loop ----------
 renderer.setAnimationLoop((t, frame)=>{
   if(frame && hitSource && !placed){
     const hits = frame.getHitTestResults(hitSource);
@@ -186,10 +156,9 @@ renderer.setAnimationLoop((t, frame)=>{
     }
   }
 
-  // Keep locked to the anchor pose each frame (prevents drift)
-  if (frame && anchorSpace) {
+  if(frame && anchorSpace){
     const aPose = frame.getPose(anchorSpace, refSpace);
-    if (aPose) {
+    if(aPose){
       root.matrix.fromArray(aPose.transform.matrix);
       root.matrix.decompose(root.position, root.quaternion, root.scale);
     }
@@ -199,18 +168,9 @@ renderer.setAnimationLoop((t, frame)=>{
   renderer.render(scene, camera);
 });
 
-// ------- resize -------
 addEventListener('resize', ()=>{
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
-
-// quick HEAD check for your file path
-try{
-  const r = await fetch(MODEL,{method:'HEAD'});
-  log("model HEAD:", r.status);
-}catch(e){ log("HEAD error:", e?.message||e); }
 </script>
-</body>
-</html>
