@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Splat – AR (plane detect)</title>
+  <title>Avatar Splat – AR (hit-test)</title>
+
+  <!-- same import map style as your ar_avatar.html -->
   <script type="importmap">
   {
     "imports": {
@@ -12,6 +14,7 @@
     }
   }
   </script>
+
   <style>
     html,body{margin:0;height:100%;overflow:hidden;background:#111}
     #enter{position:fixed;left:12px;bottom:12px;z-index:10;padding:10px 14px;border:0;border-radius:8px;background:#0a84ff;color:#fff;font:600 14px system-ui}
@@ -25,9 +28,10 @@
 <script type="module">
 import * as THREE from "three";
 import * as G from "@mkkellogg/gaussian-splats-3d";
+
 const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
 
-// three.js scene we control
+// Three scene (so we can do hit-test like a VR page)
 const scene=new THREE.Scene();
 const camera=new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
 const renderer=new THREE.WebGLRenderer({alpha:true, antialias:false});
@@ -35,28 +39,26 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.xr.enabled=true;
 document.body.appendChild(renderer.domElement);
 
-// group we move to hit-test pose
+// Group we’ll move to the hit-test pose
 const root=new THREE.Group(); scene.add(root);
 
-// reticle
+// Reticle
 const reticle=new THREE.Mesh(
   new THREE.RingGeometry(0.08,0.1,32).rotateX(-Math.PI/2),
   new THREE.MeshBasicMaterial({color:0xffffff})
 );
 reticle.matrixAutoUpdate=false; reticle.visible=false; scene.add(reticle);
 
-// load your ksplat
+// We’ll create/load the splat AFTER AR starts (more reliable on phones)
 const MODEL_URL="./assets/data/Shakti-edit.ksplat";
-const splat=new G.DropInViewer({gpuAcceleratedSort:true, enableSIMDInSort:true});
-await splat.addSplatScenes([{ path: MODEL_URL, showLoadingUI:true, splatAlphaRemovalThreshold:5 }]);
-splat.scale.set(0.6,0.6,0.6); // tweak size
-root.add(splat);
+let splat=null;
 
-// WebXR hit-test
 let session, refSpace, viewerSpace, hitSource, placed=false;
 
 async function startAR(){
-  if(!navigator.xr){ alert("WebXR not available"); return; }
+  if(!navigator.xr){ alert("WebXR not available on this device"); return; }
+
+  // Start AR first (this matches the feel of your ar_avatar page)
   session=await navigator.xr.requestSession('immersive-ar',{
     requiredFeatures:['hit-test','local-floor'],
     optionalFeatures:['dom-overlay'],
@@ -68,20 +70,29 @@ async function startAR(){
   viewerSpace = await session.requestReferenceSpace('viewer');
   hitSource   = await session.requestHitTestSource({space:viewerSpace});
   document.getElementById('enter').remove();
-  log("AR started ✔  move to find a surface, tap to place");
+  log("AR session started ✔  loading model…");
+
+  // NOW load the splat
+  splat=new G.DropInViewer({gpuAcceleratedSort:true, enableSIMDInSort:true});
+  await splat.addSplatScenes([{ path: MODEL_URL, showLoadingUI:true, splatAlphaRemovalThreshold:5 }]);
+  splat.scale.set(0.6,0.6,0.6);  // adjust as needed
+  root.add(splat);
+  log("model ready — move phone to find a surface, then tap to place");
 }
 document.getElementById('enter').addEventListener('click', startAR);
 
-// tap to place / re-place
-window.addEventListener('click', () => {
-  if(!session) return;
+// Tap to place / re-place (support both click and touch)
+function placeOrUnlock(){
+  if(!session || !splat) return;
   if(reticle.visible){
     reticle.matrix.decompose(root.position, root.quaternion, root.scale);
     placed=true; reticle.visible=false; log("placed ✔  tap empty space to re-place");
   }else if(placed){ placed=false; log("placement unlocked — move to new plane"); }
-});
+}
+window.addEventListener('click', placeOrUnlock, {passive:true});
+window.addEventListener('touchend', placeOrUnlock, {passive:true});
 
-// animate
+// Animation loop with hit-test
 renderer.setAnimationLoop((t,frame)=>{
   if(frame && hitSource && !placed){
     const hits=frame.getHitTestResults(hitSource);
@@ -91,17 +102,17 @@ renderer.setAnimationLoop((t,frame)=>{
       reticle.matrix.fromArray(pose.transform.matrix);
     }else reticle.visible=false;
   }
-  splat.update?.();
+  splat?.update?.();
   renderer.render(scene,camera);
 });
 
-// resize
+// Resize
 addEventListener('resize', ()=>{
   camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// sanity check asset reachable
+// Quick HEAD fetch so you’ll see 200/404 in the green log
 try{ const r=await fetch(MODEL_URL,{method:'HEAD'}); log("model:", r.status); }catch(e){ log("model error:", e?.message||e); }
 </script>
 </body>
