@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Splat – AR (viewer-driven, world-locked)</title>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./lib/three.module.js",
+      "@mkkellogg/gaussian-splats-3d": "./lib/gaussian-splats-3d.module.js"
+    }
+  }
+  </script>
+
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#111}
+    #enter{position:fixed;left:12px;bottom:12px;z-index:10;padding:10px 14px;border:0;border-radius:8px;background:#0a84ff;color:#fff;font:600 14px system-ui}
+    #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui,Arial;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+<button id="enter">Enter AR</button>
+<div id="log">loading…</div>
+
+<script type="module">
+import * as G from "@mkkellogg/gaussian-splats-3d";
+const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
+
+const MODEL="./assets/data/Shakti-edit.ksplat";
+
+// Use the library’s Viewer to own WebXR. This renders in AR world space.
+const viewer = new G.Viewer({
+  webXRMode: G.WebXRMode.AR,            // library runs the AR session
+  sharedMemoryForWorkers: false,         // safe settings for mobile
+  gpuAcceleratedSort: false,
+  enableSIMDInSort: false,
+  cameraUp: [0,1,0],
+  initialCameraPosition: [0,1.6,0],      // unused in AR but safe defaults
+  initialCameraLookAt: [0,1.2,-1]
+});
+
+// place model ~2 meters in front of AR origin (world-locked)
+await viewer.addSplatScene(MODEL, {
+  showLoadingUI: true,
+  position: [0, 0, -2.0],                // adjust distance
+  rotation: [0, 0, 0],
+  scale: [0.6, 0.6, 0.6],
+  splatAlphaRemovalThreshold: 5
+});
+
+document.getElementById('enter').addEventListener('click', async ()=>{
+  try{
+    // start viewer render loop and enter AR
+    await viewer.start();
+    log('viewer started ✔  entering AR…');
+    if (viewer.enterAR) { await viewer.enterAR(); } // some builds expose this
+  }catch(e){ log('ERROR:', e?.message||e); console.error(e); }
+});
+
+// quick HEAD check so you see 200/404 in the log
+try{ const r=await fetch(MODEL,{method:'HEAD'}); log('model:', r.status); }catch(e){ log('model error:', e?.message||e); }
+</script>
+</body>
+</html>
