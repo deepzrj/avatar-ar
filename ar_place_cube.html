@@ -1,0 +1,213 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>WebXR AR — Cube with Plane Detection + Anchor</title>
+  <script type="importmap">{
+    "imports": { "three":"./lib/three.module.js" }
+  }</script>
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#111;touch-action:none}
+    #enter{position:fixed;left:12px;bottom:12px;padding:10px 14px;border:0;border-radius:10px;background:#0a84ff;color:#fff;font:600 14px system-ui}
+    #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui;white-space:pre-wrap;max-width:80vw}
+    canvas{display:block}
+  </style>
+</head>
+<body>
+<button id="enter">Enter AR</button>
+<div id="log">loading…</div>
+
+<script type="module">
+import * as THREE from "three";
+
+const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
+
+// ---------- Three.js ----------
+const scene   = new THREE.Scene();
+const camera  = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
+const renderer= new THREE.WebGLRenderer({alpha:true, antialias:true});
+renderer.xr.enabled = true;
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// world root we’ll pin to an AR anchor
+const root = new THREE.Group();
+scene.add(root);
+
+// Simple cube (0.2 m)
+const cube = new THREE.Mesh(
+  new THREE.BoxGeometry(0.2,0.2,0.2),
+  new THREE.MeshNormalMaterial({wireframe:false})
+);
+cube.visible = false;
+root.add(cube);
+
+// Reticle (shows hit pose before placement)
+const reticle = new THREE.Mesh(
+  new THREE.RingGeometry(0.06,0.085,32).rotateX(-Math.PI/2),
+  new THREE.MeshBasicMaterial({color:0xffffff})
+);
+reticle.matrixAutoUpdate = false;
+reticle.visible = false;
+scene.add(reticle);
+
+// Plane wireframe viz (debug)
+const planeViz = new Map(); // XRPlane -> {group,line}
+function buildPlaneGroup(){
+  const group = new THREE.Group();
+  const geom  = new THREE.BufferGeometry();
+  const line  = new THREE.LineLoop(geom, new THREE.LineBasicMaterial({color:0x39ff14}));
+  group.add(line);
+  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.01,16), new THREE.MeshBasicMaterial({color:0x39ff14}));
+  dot.rotation.x = -Math.PI/2;
+  group.add(dot);
+  return {group, line};
+}
+function updatePlanePolygon(line, polygon){
+  const verts = new Float32Array(polygon.length*3);
+  for(let i=0;i<polygon.length;i++){ const p=polygon[i]; verts[i*3]=p.x; verts[i*3+1]=p.y; verts[i*3+2]=p.z; }
+  line.geometry.setAttribute('position', new THREE.BufferAttribute(verts,3));
+  line.geometry.computeBoundingSphere();
+  line.geometry.attributes.position.needsUpdate = true;
+}
+
+// ---------- WebXR state ----------
+let session, refSpace, viewerSpace, hitSource;
+let placed=false, anchor=null, anchorSpace=null;
+
+// Start AR
+document.getElementById('enter').addEventListener('click', startAR, {passive:true});
+async function startAR(){
+  if(!navigator.xr){ alert('WebXR not available'); return; }
+  try{
+    session = await navigator.xr.requestSession('immersive-ar',{
+      requiredFeatures:['hit-test','local-floor','plane-detection','anchors'],
+      optionalFeatures:['dom-overlay'],
+      domOverlay:{root:document.body}
+    });
+    renderer.xr.setReferenceSpaceType('local-floor');
+    await renderer.xr.setSession(session);
+
+    refSpace    = await session.requestReferenceSpace('local-floor');
+    viewerSpace = await session.requestReferenceSpace('viewer');
+    hitSource   = await session.requestHitTestSource({space:viewerSpace});
+
+    session.addEventListener('select', placeOnce);
+    addEventListener('pointerup', placeOnce, {passive:true});
+    addEventListener('touchend', placeOnce, {passive:true});
+
+    document.getElementById('enter').remove();
+    log('AR started ✔  move to find a surface, then tap to place');
+
+    session.addEventListener('end', ()=>{
+      planeViz.forEach(({group})=>scene.remove(group));
+      planeViz.clear();
+    });
+  }catch(e){ log('AR start ERROR: ' + (e?.message||e)); console.error(e); }
+}
+
+// Place once — **creates anchor from the hit result**
+async function placeOnce(){
+  if(!session || placed) return;
+
+  const frame = renderer.xr.getFrame?.();
+  if(!frame || !hitSource) return;
+
+  const hits = frame.getHitTestResults(hitSource);
+  if(!hits.length){ log('no hit yet'); return; }
+
+  try{
+    const hit = hits[0];
+    // Preferred: anchor directly from the hit result (best stability)
+    anchor = await hit.createAnchor?.(refSpace);
+
+    // Fallback if createAnchor is missing:
+    if(!anchor){
+      const pose = hit.getPose(refSpace);
+      const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
+      const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+      m.decompose(pos, quat, scl);
+      const transform = new XRRigidTransform({x:pos.x,y:pos.y,z:pos.z},{x:quat.x,y:quat.y,z:quat.z,w:quat.w});
+      anchor = await session.requestAnchor?.(transform, refSpace);
+    }
+
+    anchorSpace = anchor?.anchorSpace ?? null;
+
+    // Make cube visible; stop reticle updates
+    cube.visible = true;
+    placed = true;
+    reticle.visible = false;
+    log(anchorSpace ? 'placed with anchor ✔' : 'placed ✔ (no anchor support)');
+
+    session.removeEventListener('select', placeOnce);
+    removeEventListener('pointerup', placeOnce);
+    removeEventListener('touchend', placeOnce);
+  }catch(e){
+    cube.visible = true; placed = true; reticle.visible = false;
+    log('placed ✔ (anchor error): ' + (e?.message||e)); console.warn(e);
+  }
+}
+
+// Frame loop
+renderer.setAnimationLoop((t, frame)=>{
+  if(!frame){ renderer.render(scene, camera); return; }
+
+  // Before placement: show reticle via hit-test
+  if(hitSource && !placed){
+    const hits = frame.getHitTestResults(hitSource);
+    if(hits.length){
+      const pose = hits[0].getPose(refSpace);
+      if(pose){ reticle.visible = true; reticle.matrix.fromArray(pose.transform.matrix); }
+    } else { reticle.visible = false; }
+  }
+
+  // After placement: drive root by anchor pose
+  if(placed && anchorSpace){
+    const anchorPose = frame.getPose(anchorSpace, refSpace);
+    if(anchorPose){
+      const m = new THREE.Matrix4().fromArray(anchorPose.transform.matrix);
+      m.decompose(root.position, root.quaternion, root.scale);
+    }
+  }
+
+  // Plane viz (debug)
+  const planes = frame.worldInformation?.detectedPlanes;
+  if(planes){
+    for(const plane of planes){
+      if(!planeViz.has(plane)){
+        const {group,line} = buildPlaneGroup();
+        scene.add(group);
+        planeViz.set(plane,{group,line});
+        plane.addEventListener?.('removed', ()=>{
+          const pv = planeViz.get(plane);
+          if(pv){ scene.remove(pv.group); planeViz.delete(plane); }
+        });
+      }
+      const pv = planeViz.get(plane);
+      const planePose = frame.getPose(plane.planeSpace, refSpace);
+      if(planePose){
+        const m = new THREE.Matrix4().fromArray(planePose.transform.matrix);
+        m.decompose(pv.group.position, pv.group.quaternion, pv.group.scale);
+      }
+      if(plane.polygon && plane.polygon.length>=3){
+        const line = planeViz.get(plane).line;
+        updatePlanePolygon(line, plane.polygon);
+      }
+    }
+    planeViz.forEach((pv, pl)=>{ if(!planes.has(pl)){ scene.remove(pv.group); planeViz.delete(pl); }});
+  }
+
+  renderer.render(scene, camera);
+});
+
+// Resize
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
