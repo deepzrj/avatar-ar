@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Splat Debug</title>
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#111;color:#0f0;font:14px/1.4 system-ui,Arial}
+    #log{position:fixed;top:8px;left:8px;right:8px;max-height:45vh;overflow:auto;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+<div id="log">loading…</div>
+<script type="module">
+  const log = (...a)=>{ log.el.textContent += "\n" + a.join(" "); };
+  log.el = document.getElementById('log');
+
+  log("importing lib…");
+  import * as G from "./lib/gaussian-splats-3d.module.js";
+
+  (async ()=>{
+    try{
+      const MODEL = "./assets/data/Shakti-edit.ksplat";
+      log("fetching model:", MODEL);
+      const r = await fetch(MODEL);
+      log("fetch status:", r.status);
+
+      log("creating viewer…");
+      const viewer = new G.Viewer({
+        webXRMode: G.WebXRMode.NONE,
+        sharedMemoryForWorkers: false,
+        cameraUp: [0,1,0],
+        initialCameraPosition: [0,0,3],
+        initialCameraLookAt: [0,0,0],
+        gpuAcceleratedSort: true,
+        enableSIMDInSort: true,
+      });
+
+      log("addSplatScene…");
+      await viewer.addSplatScene(MODEL, {
+        showLoadingUI: true,
+        position: [0,0,0],
+        scale: [1,1,1],
+        splatAlphaRemovalThreshold: 5
+      });
+
+      log("start viewer…");
+      viewer.start();
+      log("done ✔");
+    }catch(e){ log("ERROR:", e && e.message ? e.message : e); }
+  })();
+</script>
+</body>
+</html>
+

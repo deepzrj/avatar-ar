@@ -1,0 +1,166 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Markerless AR – Tap to place & anchor</title>
+
+<script type="importmap">{
+  "imports": {
+    "three": "./lib/three.module.js"
+  }
+}</script>
+
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#000}
+  #enter{position:fixed;left:12px;bottom:12px;padding:10px 14px;border:0;border-radius:10px;
+         background:#0a84ff;color:#fff;font:600 14px system-ui}
+</style>
+</head>
+<body>
+<button id="enter">Enter AR</button>
+
+<script type="module">
+import * as THREE from "three";
+
+let renderer, scene, camera;
+let root;                        // your "gameobject" container
+let reticle;                     // shows hit pose
+let placed = false;
+
+let refSpace, viewerSpace, hitSrc;
+let anchor = null, anchorSpace = null;
+let lastHitMatrix = null;
+let placeRequested = false;
+
+init();
+
+function init(){
+  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  renderer.xr.enabled = true;
+  renderer.setPixelRatio(devicePixelRatio);
+  renderer.setSize(innerWidth, innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 20);
+
+  // lights
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+  dir.position.set(1,2,1);
+  scene.add(dir);
+
+  // container (swap cube -> splat later)
+  root = new THREE.Group();
+  root.matrixAutoUpdate = false;
+  scene.add(root);
+
+  // simple cube now (0.2m); replace with splat later
+  const cube = new THREE.Mesh(
+    new THREE.BoxGeometry(0.2,0.2,0.2),
+    new THREE.MeshStandardMaterial({ roughness:0.85, metalness:0.1 })
+  );
+  cube.position.y = 0.1;
+  root.add(cube);
+
+  // reticle (hit pose visual)
+  reticle = new THREE.Mesh(
+    new THREE.RingGeometry(0.08,0.1,32).rotateX(-Math.PI/2),
+    new THREE.MeshBasicMaterial({ color:0x00ffff })
+  );
+  reticle.matrixAutoUpdate = false;
+  reticle.visible = false;
+  scene.add(reticle);
+
+  document.getElementById('enter').addEventListener('click', startAR);
+
+  addEventListener('resize', ()=>{
+    camera.aspect = innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+}
+
+async function startAR(){
+  if(!navigator.xr || !(await navigator.xr.isSessionSupported('immersive-ar'))){
+    alert('immersive-ar not supported on this device/browser');
+    return;
+  }
+
+  const session = await navigator.xr.requestSession('immersive-ar', {
+    requiredFeatures: ['hit-test'],
+    optionalFeatures: ['anchors','plane-detection','dom-overlay'],
+    domOverlay: { root: document.body }
+  });
+  renderer.xr.setSession(session);
+  document.getElementById('enter').style.display = 'none';
+
+  refSpace    = await session.requestReferenceSpace('local');
+  viewerSpace = await session.requestReferenceSpace('viewer');
+  hitSrc      = await session.requestHitTestSource({ space: viewerSpace });
+
+  // “tap to place” like three.ar.js select event
+  session.addEventListener('select', ()=>{
+    if (lastHitMatrix) placeRequested = true;
+  });
+
+  renderer.setAnimationLoop((t, frame)=>{
+    if(!frame) return;
+
+    // 1) plane hit-test (markerless logic)
+    const hits = frame.getHitTestResults(hitSrc);
+    if (hits.length && !placed) {
+      const hit  = hits[0];
+      const pose = hit.getPose(refSpace);
+      if (pose){
+        reticle.visible = true;
+        reticle.matrix.fromArray(pose.transform.matrix);
+        lastHitMatrix = pose.transform.matrix;
+
+        // 2) if user tapped, create anchor and “track” gameobject
+        if (placeRequested){
+          placeRequested = false;
+          placeAtHit(frame, hit, pose);
+        }
+      }
+    } else {
+      reticle.visible = false;
+    }
+
+    // 3) while anchored, keep root following anchor space
+    if (placed && anchorSpace){
+      const apose = frame.getPose(anchorSpace, refSpace);
+      if (apose) root.matrix.fromArray(apose.transform.matrix);
+    }
+
+    renderer.render(scene, camera);
+  });
+}
+
+async function placeAtHit(frame, hit, pose){
+  try {
+    // preferred path (same idea as three.ar.js addAnchor(hit))
+    if (typeof hit.createAnchor === 'function') {
+      anchor = await hit.createAnchor();
+      anchorSpace = anchor.anchorSpace;
+    } else if (typeof frame.createAnchor === 'function') {
+      const xform = new XRRigidTransform(pose.transform);
+      anchor = await frame.createAnchor(xform, refSpace);
+      anchorSpace = anchor.anchorSpace;
+    }
+  } catch (e) {
+    console.warn('Anchor failed, falling back to fixed matrix.', e);
+  }
+
+  if (!anchorSpace) {
+    // fallback: single-shot placement (not as stable as true anchors)
+    root.matrix.fromArray(lastHitMatrix);
+  }
+
+  placed = true;
+  reticle.visible = false;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!doctype html><html><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>AR Debug (world-locked)</title>
+<script type="importmap">{"imports":{
+  "three":"./lib/three.module.js",
+  "@mkkellogg/gaussian-splats-3d":"./lib/gaussian-splats-3d.module.js"
+}}</script>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#111}
+  #enter{position:fixed;left:12px;bottom:12px;padding:10px 14px;border:0;border-radius:8px;background:#0a84ff;color:#fff;font:600 14px system-ui}
+  #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui;white-space:pre-wrap}
+</style>
+</head><body>
+<button id="enter">Enter AR</button>
+<div id="log">boot…</div>
+
+<script type="module">
+import * as THREE from "three";
+import * as G from "@mkkellogg/gaussian-splats-3d";
+const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
+
+// --- 1) set up THREE (should show a spinning cube BEFORE AR)
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
+const renderer=new THREE.WebGLRenderer({alpha:true, antialias:false});
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled=true;
+document.body.appendChild(renderer.domElement);
+
+// cube: if you can see this spinning on desktop, the renderer is fine
+const cube=new THREE.Mesh(
+  new THREE.BoxGeometry(0.2,0.2,0.2),
+  new THREE.MeshNormalMaterial()
+);
+cube.position.set(0, 1.2, -1);   // in front of the camera
+scene.add(cube);
+
+// update on resize
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+
+// --- 2) world-locked AR session (like the VR demo; no plane detect)
+const MODEL="./assets/data/Shakti-edit.ksplat";
+let splat=null;
+
+async function onEnterAR(){
+  try{
+    if(!navigator.xr){ log('ERROR: WebXR not available'); alert('WebXR not available'); return; }
+
+    // Start AR
+    log('requesting AR session…');
+    const session=await navigator.xr.requestSession('immersive-ar', { requiredFeatures:['local-floor'] });
+    renderer.xr.setReferenceSpaceType('local-floor');
+    await renderer.xr.setSession(session);
+    log('AR session ✔');
+
+    // Load the splat in SAFE mode
+    log('loading model…');
+    splat = new G.DropInViewer({
+      sharedMemoryForWorkers:false,
+      gpuAcceleratedSort:false,
+      enableSIMDInSort:false
+    });
+    await splat.addSplatScenes([{ path: MODEL, showLoadingUI:true, splatAlphaRemovalThreshold:5 }]);
+    splat.scale.set(0.6,0.6,0.6);
+    // Pin it ~2m in front; you can walk around it
+    const root=new THREE.Group(); root.position.set(0,0,-2); scene.add(root);
+    root.add(splat);
+    log('model ready ✔');
+
+    // remove button
+    document.getElementById('enter').remove();
+  }catch(e){
+    log('ERROR:', e?.message||e);
+    console.error(e);
+  }
+}
+document.getElementById('enter').addEventListener('click', onEnterAR, {passive:true});
+
+// --- 3) render loop (you should always see a spinning cube)
+renderer.setAnimationLoop(()=>{
+  cube.rotation.y += 0.02;
+  renderer.render(scene, camera);
+});
+
+// quick HEAD check so you see 200/404
+try{ const r=await fetch(MODEL,{method:'HEAD'}); log('model HEAD:', r.status); }catch(e){ log('model HEAD err:', e?.message||e); }
+</script>
+</body></html>

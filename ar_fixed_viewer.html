@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Splat – AR (viewer-driven, world-locked)</title>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./lib/three.module.js",
+      "@mkkellogg/gaussian-splats-3d": "./lib/gaussian-splats-3d.module.js"
+    }
+  }
+  </script>
+
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#111}
+    #log{position:fixed;top:8px;left:8px;color:#0f0;font:14px/1.4 system-ui,Arial;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+<div id="log">loading…</div>
+
+<script type="module">
+import * as G from "@mkkellogg/gaussian-splats-3d";
+const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
+
+const MODEL="./assets/data/Shakti-edit.ksplat";
+log("boot ✔");
+
+// 1) Create viewer that OWNS AR
+const viewer = new G.Viewer({
+  webXRMode: G.WebXRMode.AR,
+  sharedMemoryForWorkers: false,
+  gpuAcceleratedSort: false,
+  enableSIMDInSort: false,
+  cameraUp: [0,1,0],
+  initialCameraPosition: [0,1.6,0],
+  initialCameraLookAt: [0,1.2,-1]
+});
+
+// 2) Add the splat VERY close and LARGE so it's hard to miss
+try{
+  await viewer.addSplatScene(MODEL, {
+    showLoadingUI: true,
+    position: [0, 0.1, -0.8],   // 80 cm in front, 10 cm up
+    scale: [1.8, 1.8, 1.8],     // big
+    splatAlphaRemovalThreshold: 5
+  });
+  log("splat added ✔");
+}catch(e){
+  log("addSplatScene ERROR:", e?.message||e);
+}
+
+// 3) Start viewer immediately; use the viewer's GREY “START AR” button
+(async ()=>{
+  await viewer.start();
+  log("viewer started ✔  tap the GREY 'START AR' button");
+})();
+
+// quick HEAD check
+try{
+  const r=await fetch(MODEL,{method:"HEAD"});
+  log("model HEAD:", r.status);
+}catch(e){
+  log("model HEAD error:", e?.message || e);
+}
+</script>
+</body>
+</html>

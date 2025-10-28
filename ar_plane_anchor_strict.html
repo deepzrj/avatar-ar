@@ -1,0 +1,174 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>AR — Strict Anchors (Cube + Verbose Logs)</title>
+  <script type="importmap">{"imports":{"three":"./lib/three.module.js"}}</script>
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#111;touch-action:none}
+    #enter{position:fixed;left:12px;bottom:12px;padding:10px 14px;border:0;border-radius:10px;background:#0a84ff;color:#fff;font:600 14px system-ui}
+    #log{position:fixed;top:8px;left:8px;right:8px;color:#0f0;font:14px/1.4 system-ui;white-space:pre-wrap}
+    canvas{display:block}
+  </style>
+</head>
+<body>
+<button id="enter">Enter AR</button>
+<div id="log">loading…</div>
+
+<script type="module">
+import * as THREE from "three";
+const log=(...a)=>{const e=document.getElementById('log');e.textContent+=(e.textContent?'\n':'')+a.join(' ')};
+
+// --- three.js scene ---
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
+const renderer = new THREE.WebGLRenderer({alpha:true, antialias:true});
+renderer.xr.enabled = true;
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// world root driven ONLY by anchor pose
+const root = new THREE.Group();
+scene.add(root);
+
+// cube
+const cube = new THREE.Mesh(
+  new THREE.BoxGeometry(0.25,0.25,0.25),
+  new THREE.MeshNormalMaterial()
+);
+cube.visible = false;
+root.add(cube);
+
+// reticle
+const reticle = new THREE.Mesh(
+  new THREE.RingGeometry(0.06,0.085,32).rotateX(-Math.PI/2),
+  new THREE.MeshBasicMaterial({color:0xffffff})
+);
+reticle.matrixAutoUpdate = false;
+reticle.visible = false;
+scene.add(reticle);
+
+// state
+let session, refSpace, viewerSpace, hitSource;
+let placed = false;
+let anchorSpace = null;
+
+document.getElementById('enter').addEventListener('click', startAR, {passive:true});
+
+async function startAR(){
+  if(!navigator.xr){ alert('WebXR not available'); return; }
+  log('requesting session (anchors REQUIRED)…');
+
+  try{
+    session = await navigator.xr.requestSession('immersive-ar',{
+      requiredFeatures:['hit-test','local-floor','anchors'],
+      optionalFeatures:['dom-overlay'],
+      domOverlay:{root:document.body}
+    });
+  }catch(e){
+    log('❌ Could not start AR with required anchors: ' + (e?.message||e));
+    return;
+  }
+
+  renderer.xr.setReferenceSpaceType('local-floor');
+  await renderer.xr.setSession(session);
+
+  refSpace    = await session.requestReferenceSpace('local-floor');
+  viewerSpace = await session.requestReferenceSpace('viewer');
+  hitSource   = await session.requestHitTestSource({space:viewerSpace});
+
+  session.addEventListener('select', placeOnce);
+  addEventListener('pointerup', placeOnce, {passive:true});
+  addEventListener('touchend', placeOnce, {passive:true});
+
+  document.getElementById('enter').remove();
+  log('AR started ✔  move to find a surface, then tap to place');
+}
+
+async function placeOnce(){
+  if(!session || placed) return;
+
+  const frame = renderer.xr.getFrame?.();
+  if(!frame || !hitSource){ log('no frame/hitSource'); return; }
+
+  const hits = frame.getHitTestResults(hitSource);
+  log('tap: hits=' + hits.length);
+  if(!hits.length){ log('no hit yet — move phone to find a surface'); return; }
+
+  const hit = hits[0];
+
+  try{
+    // TRY 1: anchor from hit (preferred)
+    if (hit.createAnchor) {
+      const anchor = await hit.createAnchor(refSpace);
+      anchorSpace = anchor.anchorSpace;
+      log('anchor created via hit.createAnchor ✔');
+    } else {
+      // TRY 2: anchor from world transform (fallback but still STRICT anchors)
+      const pose = hit.getPose(refSpace);
+      if(!pose){ log('❌ hit has no pose'); return; }
+      const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
+      const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+      m.decompose(pos, quat, scl);
+      const transform = new XRRigidTransform(
+        {x:pos.x,y:pos.y,z:pos.z},
+        {x:quat.x,y:quat.y,z:quat.z,w:quat.w}
+      );
+      if (session.requestAnchor) {
+        const anchor = await session.requestAnchor(transform, refSpace);
+        anchorSpace = anchor.anchorSpace;
+        log('anchor created via session.requestAnchor ✔');
+      } else {
+        log('❌ anchors supported but neither hit.createAnchor nor session.requestAnchor exist — cannot place (strict).');
+        return;
+      }
+    }
+
+    cube.visible = true;
+    placed = true;
+    reticle.visible = false;
+    log('placed ✔ (anchored)');
+
+    session.removeEventListener('select', placeOnce);
+    removeEventListener('pointerup', placeOnce);
+    removeEventListener('touchend', placeOnce);
+
+  }catch(e){
+    log('❌ anchor creation failed: ' + (e?.message||e));
+  }
+}
+
+// animation loop
+renderer.setAnimationLoop((t, frame)=>{
+  if(frame && hitSource && !placed){
+    const hits = frame.getHitTestResults(hitSource);
+    document.title = `hits:${hits.length}`; // tiny live indicator
+    if(hits.length){
+      const pose = hits[0].getPose(refSpace);
+      if(pose){ reticle.visible = true; reticle.matrix.fromArray(pose.transform.matrix); }
+    } else {
+      reticle.visible = false;
+    }
+  }
+
+  if(placed && anchorSpace){
+    const pose = renderer.xr.getFrame()?.getPose(anchorSpace, refSpace);
+    if(pose){
+      const m = new THREE.Matrix4().fromArray(pose.transform.matrix);
+      m.decompose(root.position, root.quaternion, root.scale);
+    }
+  }
+
+  renderer.render(scene, camera);
+});
+
+addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
